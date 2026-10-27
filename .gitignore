@@ -1,0 +1,12 @@
+# Datos reales: JAMAS viajan
+salida-*/
+*.sqlite
+*.sqlite-*
+ChatStorage*
+*.csv
+*.json
+!.*example*.json
+# Secretos y configuración local
+.env
+*.env
+!.env.example

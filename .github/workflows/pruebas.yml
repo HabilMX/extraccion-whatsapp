@@ -1,0 +1,69 @@
+name: pruebas
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  autoprueba:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Autoprueba del extractor (control positivo)
+        run: python3 extraer-whatsapp.py --autoprueba
+
+      - name: El extractor se detiene ante un formato distinto (control negativo)
+        run: |
+          python3 - <<'PY'
+          import sqlite3
+          c = sqlite3.connect("formato-ajeno.sqlite")
+          c.executescript('CREATE TABLE ZWACHATSESSION (Z_PK INTEGER, ZCONTACTJID TEXT);'
+                          'CREATE TABLE ZWAMESSAGE (Z_PK INTEGER, ZTEXT TEXT);')
+          c.commit(); c.close()
+          PY
+          if python3 extraer-whatsapp.py --sqlite formato-ajeno.sqlite --salida ./no-debe-existir; then
+            echo "FALLA: aceptó un formato que no sabe leer"; exit 1
+          fi
+          test ! -d ./no-debe-existir || { echo "FALLA: escribió salida a medias"; exit 1; }
+          echo "ok: se detuvo y no escribió nada"
+
+      - name: Sin secretos ni datos en lo publicado
+        run: |
+          mkdir -p ../revisar && cp -R . ../revisar/contenido
+          rm -rf ../revisar/contenido/.git
+          # La lista privada de nombres no vive en este repo (por eso existe esta revisión),
+          # así que aquí se renuncia a ella de forma explícita. Fuera del CI, sin PATRONES_EXTRA
+          # el verificador falla a propósito.
+          SIN_LISTA_PRIVADA=1 ./verificar-publicable.sh ../revisar/contenido
+
+      - name: Sin lista privada y sin renuncia, el verificador FALLA (control negativo)
+        run: |
+          mkdir -p limpio && echo "nada que ver" > limpio/a.txt
+          if ./verificar-publicable.sh limpio; then
+            echo "FALLA: dio verde sin haber revisado los nombres"; exit 1
+          fi
+          echo "ok: falla cerrado"
+
+      - name: El verificador caza lo que debe (control negativo)
+        run: |
+          mkdir -p trampa
+          # Las carnadas se ARMAN EN EJECUCION, por piezas: si estuvieran escritas enteras aqui,
+          # este archivo seria el que el verificador marca, y la prueba se morderia la cola.
+          A='-----BEGIN RSA'; B='PRIVATE KEY-----'
+          ESQ='postgresql'; USR='u'; CLA='clave'; HOST='servidor.interno'
+          TOK='glpat'; RESTO='ABCDEFGH12345678'
+          printf -- '%s %s\nMIIEow\n' "$A" "$B"            >  trampa/a.txt
+          printf '%s' "$ESQ://$USR:$CLA"            >> trampa/a.txt   # la mitad de la carnada...
+          printf '@%s:5432/b\n' "$HOST"              >> trampa/a.txt   # ...y la otra, para que
+          #  ni el formato de printf parezca una credencial al revisarse este archivo
+          printf '%s-%s\n' "$TOK" "$RESTO"                  >> trampa/a.txt
+          if SIN_LISTA_PRIVADA=1 ./verificar-publicable.sh trampa; then
+            echo "FALLA: el verificador dio verde a un archivo con secretos"; exit 1
+          fi
+          echo "ok: lo cazó"
